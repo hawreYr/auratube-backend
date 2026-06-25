@@ -1,171 +1,86 @@
-
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('@distube/ytdl-core');
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3000;
 
-// Enable CORS for frontend accessibility
-app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
-}));
-
+app.use(cors());
 app.use(express.json());
 
-// 1. Root / Health Check Endpoint
-app.get('/', (req, res) => {
-    res.status(200).json({
-        status: 'active',
-        message: 'AuraTube Backend is online and running successfully!',
-        endpoints: {
-            info: '/info?url=<youtube_url>',
-            download: '/download?url=<youtube_url>&itag=<itag_number>'
-        }
-    });
-});
+// Helper to sanitize a filename
+function sanitize(title) {
+  return title.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+}
 
-app.get('/health', (req, res) => {
-    res.status(200).send('OK');
-});
-
-// 2. Fetch Video Metadata & Available Formats
-app.get('/info', async (req, res) => {
-    try {
-        const videoUrl = req.query.url;
-        if (!videoUrl) {
-            return res.status(400).json({ error: 'Missing "url" query parameter' });
-        }
-
-        if (!ytdl.validateURL(videoUrl)) {
-            return res.status(400).json({ error: 'Invalid YouTube URL format' });
-        }
-
-        // Fetch deep details with deciphered streaming signatures
-        const info = await ytdl.getInfo(videoUrl);
-
-        // Sanitize & structure basic video details
-        const details = {
-            title: info.videoDetails.title,
-            description: info.videoDetails.description ? info.videoDetails.description.slice(0, 150) + '...' : '',
-            thumbnail: info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1]?.url || '',
-            duration: parseInt(info.videoDetails.lengthSeconds),
-            author: info.videoDetails.author.name,
-            viewCount: parseInt(info.videoDetails.viewCount).toLocaleString(),
-            publishDate: info.videoDetails.publishDate
-        };
-
-        // Extract and map all download formats
-        const formats = info.formats.map(f => {
-            let type = 'unknown';
-            if (f.hasVideo && f.hasAudio) {
-                type = 'video_audio'; // Pre-merged stream (Standard definitions up to 720p)
-            } else if (f.hasVideo) {
-                type = 'video_only';  // High-def streams (1080p, 2K, 4K)
-            } else if (f.hasAudio) {
-                type = 'audio_only';  // Quality audio tracks (MP3/M4A)
-            }
-
-            return {
-                itag: f.itag,
-                quality: f.qualityLabel || (f.audioBitrate ? `${f.audioBitrate}kbps` : 'audio'),
-                container: f.container,
-                hasVideo: f.hasVideo,
-                hasAudio: f.hasAudio,
-                type: type,
-                mimeType: f.mimeType ? f.mimeType.split(';')[0] : '',
-                sizeBytes: f.contentLength ? parseInt(f.contentLength) : null
-            };
-        });
-
-        res.json({ details, formats });
-    } catch (error) {
-        console.error('Error fetching video metadata:', error.message);
-        res.status(500).json({ error: 'Failed to retrieve video details. Make sure the URL is public.' });
-    }
-});
-
-// 3. Dynamic Stream & Download Router
 app.get('/download', async (req, res) => {
-    try {
-        const videoUrl = req.query.url;
-        const itag = req.query.itag;
-        const formatType = req.query.format || 'mp4'; // default to mp4
+  const videoUrl = req.query.url;
+  if (!videoUrl || !videoUrl.includes('youtube.com/watch') && !videoUrl.includes('youtu.be/')) {
+    return res.status(400).json({ error: 'Invalid YouTube URL' });
+  }
 
-        if (!videoUrl) {
-            return res.status(400).send('Missing "url" query parameter');
-        }
+  try {
+    // First, get the video title (to use as filename)
+    const titleProcess = spawn('yt-dlp', [
+      '--get-title',
+      '--no-playlist',
+      videoUrl
+    ]);
+    let title = '';
+    titleProcess.stdout.on('data', (data) => { title += data.toString(); });
+    titleProcess.stderr.on('data', () => {}); // ignore errors, fallback later
 
-        if (!ytdl.validateURL(videoUrl)) {
-            return res.status(400).send('Invalid YouTube URL');
-        }
+    await new Promise((resolve, reject) => {
+      titleProcess.on('close', (code) => {
+        if (code !== 0) return reject(new Error('Failed to get title'));
+        resolve();
+      });
+    });
+    title = title.trim() || 'video';
+    const filename = sanitize(title) + '.mp4';
 
-        const info = await ytdl.getInfo(videoUrl);
-        
-        // Clean characters to prevent filename breaking headers
-        const rawTitle = info.videoDetails.title || 'AuraTube_Video';
-        const cleanTitle = rawTitle.replace(/[^a-zA-Z0-9\s-_]/g, '').replace(/\s+/g, '_');
+    // Set response headers for file download
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Type', 'video/mp4');
 
-        let selectedFormat = null;
-        if (itag) {
-            selectedFormat = info.formats.find(f => f.itag == itag);
-        }
+    // Now spawn yt-dlp to download and pipe directly to response
+    const ytDlp = spawn('yt-dlp', [
+      '-f', 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+      '--merge-output-format', 'mp4',
+      '-o', '-',          // output to stdout
+      '--no-playlist',
+      videoUrl
+    ]);
 
-        let downloadOptions = {
-            requestOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            }
-        };
+    ytDlp.stdout.pipe(res);
 
-        if (selectedFormat) {
-            downloadOptions.format = selectedFormat;
-        } else {
-            if (formatType === 'mp3') {
-                downloadOptions.quality = 'highestaudio';
-                downloadOptions.filter = 'audioonly';
-            } else {
-                downloadOptions.quality = 'highest';
-                downloadOptions.filter = 'audioandvideo';
-            }
-        }
+    ytDlp.stderr.on('data', (data) => {
+      console.error(`yt-dlp stderr: ${data}`);
+    });
 
-        const finalFormat = selectedFormat || ytdl.chooseFormat(info.formats, downloadOptions);
-        const ext = formatType === 'mp3' ? 'mp3' : (finalFormat ? finalFormat.container : 'mp4');
-        const filename = `${cleanTitle}.${ext}`;
+    ytDlp.on('error', (err) => {
+      console.error('Failed to start yt-dlp:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Download failed' });
+      }
+    });
 
-        // Set response headers for client download
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        res.setHeader('Content-Type', formatType === 'mp3' ? 'audio/mpeg' : 'video/mp4');
+    ytDlp.on('close', (code) => {
+      if (code !== 0 && !res.headersSent) {
+        res.status(500).json({ error: 'yt-dlp process exited with error' });
+      }
+    });
 
-        if (finalFormat && finalFormat.contentLength) {
-            res.setHeader('Content-Length', finalFormat.contentLength);
-        }
-
-        // Stream binary straight to response
-        const stream = ytdl.downloadFromInfo(info, downloadOptions);
-
-        stream.on('error', (err) => {
-            console.error('Playback Stream error:', err.message);
-            if (!res.headersSent) {
-                res.status(500).send('An unexpected stream failure occurred.');
-            }
-        });
-
-        stream.pipe(res);
-
-    } catch (error) {
-        console.error('Download processor error:', error.message);
-        if (!res.headersSent) {
-            res.status(500).send('Failed to prepare stream download: ' + error.message);
-        }
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Something went wrong' });
     }
+  }
 });
 
-// Run server
 app.listen(PORT, () => {
-    console.log(`AuraTube Service deployed seamlessly on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
