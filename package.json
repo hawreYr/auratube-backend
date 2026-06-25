@@ -1,7 +1,8 @@
+
 {
-  "name": "auratube-backend",
-  "version": "1.0.0",
-  "description": "YouTube downloader backend",
+  "name": "auratube-ytdlp-backend",
+  "version": "2.0.0",
+  "description": "YouTube downloader backend powered by yt-dlp",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -9,6 +10,6 @@
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2",
-    "@distube/ytdl-core": "^4.14.4"
+    "youtube-dl-exec": "^3.0.10"
   }
 }
