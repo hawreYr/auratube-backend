@@ -1,108 +1,80 @@
 
 const express = require('express');
 const cors = require('cors');
+const youtubedl = require('youtube-dl-exec');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Allow your frontend to communicate with this server
+// Allow your frontend to talk to this server securely
 app.use(cors({ origin: '*' }));
-app.use(express.json());
 
-app.get('/', (req, res) => res.send('AuraTube Proxy Bridge is Awake!'));
+app.get('/', (req, res) => {
+    res.send('AuraTube yt-dlp Backend is awake and running!');
+});
 
-// Route 1: Get Metadata via Official unblocked YouTube API
+// Route 1: Get Video Metadata
 app.get('/info', async (req, res) => {
     try {
         const videoURL = req.query.url;
         if (!videoURL) return res.status(400).json({ error: 'URL is required' });
 
-        let videoId = '';
-        const regex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/|youtube\.com\/shorts\/)([^"&?\/\s]{11})/i;
-        const match = videoURL.match(regex);
-        if (match) videoId = match[1];
-
-        // This official endpoint NEVER blocks datacenter IPs
-        const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(videoURL)}&format=json`;
-        const oembedRes = await fetch(oembedUrl);
-        
-        if (!oembedRes.ok) throw new Error("Video not found or is private.");
-        
-        const data = await oembedRes.json();
+        // yt-dlp fetches data flawlessly without IP bans
+        const info = await youtubedl(videoURL, {
+            dumpSingleJson: true,
+            noWarnings: true,
+            noCallHome: true,
+            noCheckCertificates: true
+        });
 
         res.json({
-            title: data.title,
-            channel: data.author_name,
-            thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+            title: info.title,
+            channel: info.uploader,
+            duration: info.duration,
+            thumbnail: info.thumbnail
         });
 
     } catch (error) {
         console.error(error);
-        res.status(500).json({ error: 'Failed to fetch video info.' });
+        res.status(500).json({ error: 'Failed to fetch video info. Backend might need a restart.' });
     }
 });
 
-// Route 2: Securely proxy download request to avoid browser CORS/Sandbox limits
-app.post('/download', async (req, res) => {
-    try {
-        const { url, quality, isAudio } = req.body;
+// Route 2: Direct Stream Download
+app.get('/download', (req, res) => {
+    const videoURL = req.query.url;
+    const isAudio = req.query.audio === 'true';
+    const title = req.query.title || 'Media';
 
-        const payload = {
-            url: url,
-            filenameStyle: 'pretty'
-        };
+    if (!videoURL) return res.status(400).send('URL is required');
 
-        if (isAudio) {
-            payload.isAudioOnly = true;
-            payload.audioFormat = 'mp3';
-        } else {
-            payload.videoQuality = quality || '1080';
-        }
+    const extension = isAudio ? 'mp3' : 'mp4';
+    const safeTitle = title.replace(/[^a-zA-Z0-9 ]/g, ""); // clean the filename
+    
+    // This header tells your browser to DOWNLOAD the file, not navigate away!
+    res.header('Content-Disposition', `attachment; filename="${safeTitle}.${extension}"`);
 
-        const cobaltNodes = [
-            "https://api.cobalt.tools",
-            "https://cobalt.api.ryb.sh",
-            "https://co.wukko.me"
-        ];
+    // For video, we grab a pre-muxed mp4. For audio, best audio.
+    const format = isAudio ? 'bestaudio' : 'best[ext=mp4]/best';
 
-        let downloadUrl = null;
+    // Pipe the stream from yt-dlp -> Render -> Your browser native downloader
+    const subprocess = youtubedl.exec(videoURL, {
+        o: '-', // output to stdout
+        f: format,
+        noWarnings: true,
+        noCallHome: true,
+        noCheckCertificates: true
+    });
 
-        // Auto-failover loop handled by the server!
-        for (const node of cobaltNodes) {
-            try {
-                const response = await fetch(node, {
-                    method: 'POST',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Content-Type': 'application/json',
-                        'User-Agent': 'AuraTube-Server/1.0'
-                    },
-                    body: JSON.stringify(payload)
-                });
+    subprocess.stdout.pipe(res);
 
-                if (response.ok) {
-                    const data = await response.json();
-                    if (data && data.url) {
-                        downloadUrl = data.url;
-                        break;
-                    }
-                }
-            } catch(e) {
-                console.log(`Node ${node} failed, trying next...`);
-            }
-        }
-
-        if (downloadUrl) {
-            res.json({ url: downloadUrl });
-        } else {
-            res.status(500).json({ error: "All backend proxy nodes failed." });
-        }
-
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ error: 'Internal Server Error' });
-    }
+    subprocess.on('error', (err) => {
+        console.error('Stream error:', err);
+        if (!res.headersSent) res.status(500).send('Download stream failed');
+    });
 });
 
-app.listen(PORT, () => console.log(`AuraTube Proxy running on port ${PORT}`));
+app.listen(PORT, () => {
+    console.log(`AuraTube yt-dlp proxy running on port ${PORT}`);
+});
 
