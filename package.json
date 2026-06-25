@@ -1,15 +1,20 @@
 
 {
-  "name": "auratube-ytdlp-backend",
-  "version": "2.0.0",
-  "description": "YouTube downloader backend powered by yt-dlp",
+  "name": "auratube-backend",
+  "version": "1.0.0",
+  "description": "Powerful and reliable backend API for downloading YouTube videos.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
     "cors": "^2.8.5",
-    "express": "^4.18.2",
-    "youtube-dl-exec": "^3.0.10"
-  }
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
 }
+
