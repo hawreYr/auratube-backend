@@ -1,4 +1,4 @@
-```javascript
+
 const express = require('express');
 const cors = require('cors');
 const ytdl = require('@distube/ytdl-core');
@@ -79,4 +79,3 @@ app.listen(PORT, () => {
     console.log(`AuraTube Backend is running on port ${PORT}`);
 });
 
-```
