@@ -1,20 +1,14 @@
-
 {
   "name": "auratube-backend",
   "version": "1.0.0",
-  "description": "Powerful and reliable backend API for downloading YouTube videos.",
+  "description": "YouTube video downloader backend",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "bash build.sh"
   },
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12",
     "cors": "^2.8.5",
-    "express": "^4.19.2"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  },
-  "private": true
+    "express": "^4.18.2"
+  }
 }
-
